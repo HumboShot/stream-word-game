@@ -1,0 +1,293 @@
+/* AFK Word Game overlay. Stays fully transparent so it can sit on top of the
+   AFK scene's background. Only the word display, winner flash, leaderboard
+   box, and status badge get their own background or border. */
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 2560px;
+    height: 1440px;
+    overflow: hidden;
+    background: transparent;
+    font-family: 'Share Tech Mono', monospace;
+}
+
+.layout {
+    display: none;
+    position: absolute;
+    inset: 0;
+}
+
+.layout.is-active {
+    display: block;
+}
+
+/* =======================================================================
+   LAYOUT: GAME. One word box at a random spot. When someone matches the
+   word in chat, the box explodes and reveals the winner (see .burst).
+   ======================================================================= */
+#word-display,
+.burst-shell {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 24px 48px;
+    border: 2px solid #00ffff;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #1e0930 0%, #0f0920 55%, #051119 100%);
+    color: #00ffff;
+    font-size: 56px;
+    font-weight: bold;
+    white-space: nowrap;
+    text-shadow: 0 0 14px rgba(0, 255, 255, 0.6);
+    box-shadow: 0 0 28px rgba(0, 0, 0, 0.5);
+}
+
+#word-display.is-entering {
+    animation: word-pop 0.3s ease-out;
+}
+
+@keyframes word-pop {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.85);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+#word-display.is-hidden {
+    visibility: hidden;
+}
+
+/* --- EXPLOSION ---
+   afk-word-game.js builds one .burst per solved word, at the old word's
+   spot, and removes it after explosionDuration. The shell and shards are
+   absolutely positioned, so the .burst size comes from the reveal text only.
+   This lets placeAt() keep the reveal text on screen. */
+.burst {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.burst-shell {
+    animation: burst-shell 0.45s ease-out forwards;
+}
+
+@keyframes burst-shell {
+    0% {
+        opacity: 1;
+        filter: brightness(1);
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    25% {
+        opacity: 1;
+        filter: brightness(2.5);
+        transform: translate(-50%, -50%) scale(1.12);
+    }
+
+    100% {
+        opacity: 0;
+        filter: brightness(2.5) blur(6px);
+        transform: translate(-50%, -50%) scale(1.8);
+    }
+}
+
+.burst-shard {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    background: #00ffff;
+    box-shadow: 0 0 12px #00ffff;
+    opacity: 0;
+    animation: burst-shard 0.8s cubic-bezier(0.1, 0.7, 0.3, 1) 0.08s forwards;
+}
+
+.burst-shard.is-gold {
+    background: #ffd700;
+    box-shadow: 0 0 12px #ffd700;
+}
+
+@keyframes burst-shard {
+    0% {
+        opacity: 1;
+        transform: translate(0, 0) rotate(0) scale(1);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translate(var(--dx), var(--dy)) rotate(var(--spin)) scale(0.3);
+    }
+}
+
+.burst-reveal {
+    text-align: center;
+    white-space: nowrap;
+    opacity: 0;
+    animation: burst-reveal 2s ease-out 0.15s forwards;
+}
+
+.burst-name {
+    font-size: 60px;
+    font-weight: bold;
+    text-shadow: 0 0 16px currentColor, 0 0 4px #000;
+}
+
+.burst-points {
+    color: #ffd700;
+    font-size: 40px;
+    font-weight: bold;
+    text-shadow: 0 0 14px rgba(255, 215, 0, 0.8), 0 0 4px #000;
+}
+
+@keyframes burst-reveal {
+    0% {
+        opacity: 0;
+        transform: scale(0.3);
+    }
+
+    12% {
+        opacity: 1;
+        transform: scale(1.2);
+    }
+
+    22% {
+        transform: scale(1);
+    }
+
+    75% {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+
+    100% {
+        opacity: 0;
+        transform: scale(1) translateY(-30px);
+    }
+}
+
+/* =======================================================================
+   LAYOUT: LEADERBOARD. Shown after leaving the AFK scene, listing this
+   round's winners by points.
+   ======================================================================= */
+#leaderboard-box {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 480px;
+    box-sizing: border-box;
+    padding: 24px 32px;
+    border: 2px solid #00ffff;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #1e0930 0%, #0f0920 55%, #051119 100%);
+    color: #00ffff;
+    text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+    box-shadow: 0 0 28px rgba(0, 0, 0, 0.5);
+}
+
+#leaderboard-title {
+    font-size: 28px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    margin-bottom: 16px;
+    text-align: center;
+}
+
+.leaderboard-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 0;
+    font-size: 24px;
+    border-top: 1px solid rgba(0, 255, 255, 0.25);
+}
+
+.leaderboard-row:first-child {
+    border-top: none;
+}
+
+.leaderboard-rank {
+    opacity: 0.7;
+    width: 2.5em;
+}
+
+.leaderboard-name {
+    flex: 1;
+    font-weight: bold;
+}
+
+.leaderboard-points {
+    color: #ffd700;
+}
+
+.leaderboard-empty {
+    padding: 8px 0;
+    font-size: 22px;
+    opacity: 0.8;
+    text-align: center;
+}
+
+/* =======================================================================
+   POINTS SERVER CONNECTION STATUS. Small badge shown only while the
+   points-server backend is unreachable. Same box treatment as the word
+   box, with a red accent.
+   ======================================================================= */
+#backend-status {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 2px solid #ff4136;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #1e0930 0%, #0f0920 55%, #051119 100%);
+    color: #ff4136;
+    font-size: 16px;
+    line-height: 1.4;
+    text-shadow: 0 0 10px rgba(255, 65, 54, 0.6);
+    box-shadow: 0 0 18px rgba(255, 65, 54, 0.4);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+}
+
+#backend-status.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+#backend-status .status-icon {
+    font-size: 1.2em;
+    animation: backend-status-pulse 1.4s ease-in-out infinite;
+}
+
+#backend-status .status-text {
+    font-weight: bold;
+}
+
+@keyframes backend-status-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.4;
+    }
+}

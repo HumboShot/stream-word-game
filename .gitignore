@@ -1,0 +1,7 @@
+# Local-only Twitch and OBS credentials (never commit; see shared/secrets.local.example.js)
+shared/secrets.local.js
+
+# points-server
+node_modules/
+points-server/data/
+points-server/points.db*
