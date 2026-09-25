@@ -11,23 +11,26 @@
 <body>
 
     <div id="layout-game" class="layout">
-        <div id="word-display"></div>
-    </div>
-
-    <div id="layout-leaderboard" class="layout">
-        <div id="leaderboard-box">
-            <div id="leaderboard-title">AFK ROUND RESULTS</div>
-            <div id="leaderboard-list"></div>
+        <div id="intro">
+            <div class="intro-title">AFK WORD GAME</div>
+            <ol class="intro-rules">
+                <li>Words pop up on the screen.</li>
+                <li>Type the word in chat.</li>
+                <li>The first one to type it gets <span class="intro-points">100</span> points.</li>
+            </ol>
+            <div class="intro-starts">FIRST WORD IN</div>
+            <div class="intro-countdown"></div>
+            <div class="intro-footer">Results go to chat when I'm back.</div>
         </div>
+        <div id="word-display" class="is-hidden"></div>
     </div>
 
-    <div id="backend-status" class="status-badge">
+    <div id="streamerbot-status" class="status-badge">
         <span class="status-icon">⚠</span>
-        <span class="status-text">POINTS SERVER OFFLINE</span>
+        <span class="status-text">STREAMER.BOT DISCONNECTED</span>
     </div>
 
-    <script src="../shared/twitch-chat.js"></script>
-    <script src="../shared/obs-websocket-client.js"></script>
+    <script src="../shared/streamerbot-client.js"></script>
     <script src="../shared/secrets.local.js"></script>
     <script src="afk-word-game.js"></script>
     <script src="afk-word-game.config.js"></script>

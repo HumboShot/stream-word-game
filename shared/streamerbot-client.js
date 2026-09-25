@@ -1,20 +1,14 @@
-// This is a minimal obs-websocket v5 client. It reports the currently active
-// OBS scene (see afk-word-game.js). Copied from the stream-overlays repo.
+// This is a minimal client for the Streamer.bot WebSocket server. The word game
+// logic runs in Streamer.bot (see streamerbot/word-game.cs). This client only
+// receives the events that the script broadcasts, and asks for the current
+// state when it connects. It is hand-rolled, like the rest of this repo, because
+// pages open directly as local files with no bundler.
 //
-// OBS Studio 28 and later ships obs-websocket built in (Tools > WebSocket Server
-// Settings). This code connects to it directly, at the default ws://localhost:4455,
-// so it needs no extra server or process beyond enabling obs-websocket in OBS. Like
-// shared/twitch-chat.js, this is a hand-rolled WebSocket client, with no
-// obs-websocket-js npm package, because this repo has no bundler and pages
-// open directly as local files.
-//
-// Protocol summary (https://github.com/obsproject/obs-websocket):
-//   1. The server sends "Hello" (op 0), with an auth challenge if a password is set.
-//   2. The client sends "Identify" (op 1), with a computed auth string if needed.
-//   3. The server sends "Identified" (op 2) once it accepts the client.
-//   4. The server sends "Event" (op 5) messages for things such as scene changes.
-//   5. The client can send "Request" (op 6) and gets "RequestResponse" (op 7).
-
+// Protocol summary (https://docs.streamer.bot/api/websocket):
+//   1. The server sends "Hello", with an auth challenge if a password is set.
+//   2. The client sends "Authenticate" if needed, then "Subscribe" to General.Custom.
+//   3. CPH.WebsocketBroadcastJson() calls arrive as General.Custom events.
+//   4. The client can send "DoAction" to run a Streamer.bot action with arguments.
 // This is a pure-JS SHA-256 implementation, with no Web Crypto or crypto.subtle dependency.
 // The OBS Browser Source loads local files through a custom scheme. This does not reliably
 // count as a "secure context", so crypto.subtle is unavailable there.
@@ -80,18 +74,40 @@ function sha256Base64(str) {
     return btoa(String.fromCharCode(...digestBytes));
 }
 
-function connectObsWebSocket({
-    url = 'ws://localhost:4455',
+function connectStreamerbot({
+    url = 'ws://127.0.0.1:8080/',
     password = '',
-    onSceneChanged, // (sceneName) => void. Called on connect, with the current scene, and on every scene change.
-    onStatusChange, // ('connected' | 'disconnected') => void. Called once identified, and again if the connection drops.
+    onCustomEvent,  // (data) => void. Called with the parsed payload of each General.Custom event.
+    onReady,        // (send) => void. Called after subscribing. send(object) sends a request.
+    onStatusChange, // ('connected' | 'disconnected') => void.
 } = {}) {
     let requestCounter = 0;
 
     function connect() {
         const ws = new WebSocket(url);
+        let ready = false;
+        let helloTimer = null;
 
-        ws.addEventListener('message', async (evt) => {
+        const send = (request) => {
+            requestCounter += 1;
+            ws.send(JSON.stringify({ id: `req-${requestCounter}`, ...request }));
+        };
+
+        function subscribe() {
+            if (ready) return;
+            ready = true;
+            clearTimeout(helloTimer);
+            send({ request: 'Subscribe', events: { General: ['Custom'] } });
+            onStatusChange && onStatusChange('connected');
+            onReady && onReady(send);
+        }
+
+        ws.addEventListener('open', () => {
+            // Streamer.bot versions before 0.2.5 send no Hello message.
+            helloTimer = setTimeout(subscribe, 1500);
+        });
+
+        ws.addEventListener('message', (evt) => {
             let msg;
             try {
                 msg = JSON.parse(evt.data);
@@ -99,42 +115,37 @@ function connectObsWebSocket({
                 return;
             }
 
-            if (msg.op === 0) {
-                // Hello. Reply with Identify, and authenticate if required.
-                const authData = msg.d.authentication;
-                const identify = { rpcVersion: msg.d.rpcVersion };
-                if (authData) {
-                    const secret = await sha256Base64(password + authData.salt);
-                    identify.authentication = await sha256Base64(secret + authData.challenge);
+            if (msg.request === 'Hello') {
+                const auth = msg.authentication;
+                if (auth) {
+                    const secret = sha256Base64(password + auth.salt);
+                    send({ request: 'Authenticate', authentication: sha256Base64(secret + auth.challenge) });
                 }
-                ws.send(JSON.stringify({ op: 1, d: identify }));
-            } else if (msg.op === 2) {
-                // Identified. Now ask for the currently active scene.
-                onStatusChange && onStatusChange('connected');
-                requestCounter += 1;
-                ws.send(JSON.stringify({
-                    op: 6,
-                    d: { requestType: 'GetCurrentProgramScene', requestId: `get-scene-${requestCounter}` },
-                }));
-            } else if (msg.op === 7 && msg.d.requestType === 'GetCurrentProgramScene') {
-                const data = msg.d.responseData || {};
-                const sceneName = data.currentProgramSceneName || data.sceneName;
-                if (sceneName) onSceneChanged && onSceneChanged(sceneName);
-            } else if (msg.op === 5 && msg.d.eventType === 'CurrentProgramSceneChanged') {
-                const data = msg.d.eventData || {};
-                const sceneName = data.sceneName || data.currentProgramSceneName;
-                if (sceneName) onSceneChanged && onSceneChanged(sceneName);
+                subscribe();
+            } else if (msg.event && msg.event.source === 'General' && msg.event.type === 'Custom') {
+                let data = msg.data;
+                if (typeof data === 'string') {
+                    try {
+                        data = JSON.parse(data);
+                    } catch (err) {
+                        return;
+                    }
+                }
+                if (data && onCustomEvent) onCustomEvent(data);
+            } else if (msg.status === 'error') {
+                console.warn('Streamer.bot: request failed', msg);
             }
         });
 
         ws.addEventListener('close', () => {
-            console.warn('OBS WebSocket: disconnected, reconnecting in 3s...');
+            clearTimeout(helloTimer);
+            console.warn('Streamer.bot: disconnected, reconnecting in 3s...');
             onStatusChange && onStatusChange('disconnected');
             setTimeout(connect, 3000);
         });
 
         ws.addEventListener('error', (err) => {
-            console.error('OBS WebSocket: connection error', err);
+            console.error('Streamer.bot: connection error', err);
         });
     }
 

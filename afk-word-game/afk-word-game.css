@@ -1,6 +1,6 @@
 /* AFK Word Game overlay. Stays fully transparent so it can sit on top of the
-   AFK scene's background. Only the word display, winner flash, leaderboard
-   box, and status badge get their own background or border. */
+   AFK scene's background. Only the word box, the explosion, and the status badge
+   get their own background or border. */
 
 html,
 body {
@@ -63,6 +63,109 @@ body {
 
 #word-display.is-hidden {
     visibility: hidden;
+}
+
+/* --- INTRO ---
+   Shown during the countdown at the start of each round (see startCountdown()
+   in afk-word-game.js). It explains the game, then pops out when the first
+   word appears. */
+#intro {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 1100px;
+    box-sizing: border-box;
+    padding: 48px 64px;
+    border: 2px solid #00ffff;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #1e0930 0%, #0f0920 55%, #051119 100%);
+    color: #00ffff;
+    text-align: center;
+    text-shadow: 0 0 12px rgba(0, 255, 255, 0.55);
+    box-shadow: 0 0 40px rgba(0, 255, 255, 0.25), 0 0 28px rgba(0, 0, 0, 0.5);
+}
+
+#intro.is-visible {
+    display: block;
+    animation: word-pop 0.4s ease-out;
+}
+
+#intro.is-leaving {
+    display: block;
+    animation: intro-out 0.35s ease-in forwards;
+}
+
+@keyframes intro-out {
+    to {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1.15);
+    }
+}
+
+.intro-title {
+    font-size: 72px;
+    font-weight: bold;
+    letter-spacing: 6px;
+    margin-bottom: 28px;
+}
+
+.intro-rules {
+    display: inline-block;
+    margin: 0 0 32px;
+    padding-left: 1.4em;
+    text-align: left;
+    font-size: 34px;
+    line-height: 1.6;
+    color: #e0ffff;
+}
+
+.intro-points {
+    color: #ffd700;
+    font-weight: bold;
+    text-shadow: 0 0 12px rgba(255, 215, 0, 0.7);
+}
+
+.intro-starts {
+    font-size: 26px;
+    letter-spacing: 4px;
+    opacity: 0.75;
+}
+
+.intro-countdown {
+    font-size: 160px;
+    font-weight: bold;
+    line-height: 1.1;
+    color: #ffd700;
+    text-shadow: 0 0 24px rgba(255, 215, 0, 0.8);
+}
+
+.intro-countdown.is-ticking {
+    animation: countdown-tick 0.5s ease-out;
+}
+
+.intro-countdown.is-final {
+    color: #ff4136;
+    text-shadow: 0 0 28px rgba(255, 65, 54, 0.9);
+}
+
+@keyframes countdown-tick {
+    from {
+        transform: scale(1.4);
+        opacity: 0.4;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.intro-footer {
+    margin-top: 20px;
+    font-size: 24px;
+    opacity: 0.7;
 }
 
 /* --- EXPLOSION ---
@@ -177,73 +280,11 @@ body {
 }
 
 /* =======================================================================
-   LAYOUT: LEADERBOARD. Shown after leaving the AFK scene, listing this
-   round's winners by points.
-   ======================================================================= */
-#leaderboard-box {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    min-width: 480px;
-    box-sizing: border-box;
-    padding: 24px 32px;
-    border: 2px solid #00ffff;
-    border-radius: 4px;
-    background: linear-gradient(90deg, #1e0930 0%, #0f0920 55%, #051119 100%);
-    color: #00ffff;
-    text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
-    box-shadow: 0 0 28px rgba(0, 0, 0, 0.5);
-}
-
-#leaderboard-title {
-    font-size: 28px;
-    font-weight: bold;
-    letter-spacing: 2px;
-    margin-bottom: 16px;
-    text-align: center;
-}
-
-.leaderboard-row {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    padding: 8px 0;
-    font-size: 24px;
-    border-top: 1px solid rgba(0, 255, 255, 0.25);
-}
-
-.leaderboard-row:first-child {
-    border-top: none;
-}
-
-.leaderboard-rank {
-    opacity: 0.7;
-    width: 2.5em;
-}
-
-.leaderboard-name {
-    flex: 1;
-    font-weight: bold;
-}
-
-.leaderboard-points {
-    color: #ffd700;
-}
-
-.leaderboard-empty {
-    padding: 8px 0;
-    font-size: 22px;
-    opacity: 0.8;
-    text-align: center;
-}
-
-/* =======================================================================
-   POINTS SERVER CONNECTION STATUS. Small badge shown only while the
-   points-server backend is unreachable. Same box treatment as the word
+   STREAMER.BOT CONNECTION STATUS. Small badge shown only while the
+   Streamer.bot WebSocket connection is down. Same box treatment as the word
    box, with a red accent.
    ======================================================================= */
-#backend-status {
+#streamerbot-status {
     position: absolute;
     right: 16px;
     bottom: 16px;
@@ -266,21 +307,21 @@ body {
     transition: opacity 0.3s ease-out, transform 0.3s ease-out;
 }
 
-#backend-status.is-visible {
+#streamerbot-status.is-visible {
     opacity: 1;
     transform: translateY(0);
 }
 
-#backend-status .status-icon {
+#streamerbot-status .status-icon {
     font-size: 1.2em;
-    animation: backend-status-pulse 1.4s ease-in-out infinite;
+    animation: streamerbot-status-pulse 1.4s ease-in-out infinite;
 }
 
-#backend-status .status-text {
+#streamerbot-status .status-text {
     font-weight: bold;
 }
 
-@keyframes backend-status-pulse {
+@keyframes streamerbot-status-pulse {
 
     0%,
     100% {

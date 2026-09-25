@@ -1,110 +1,30 @@
-// AFK Word Game overlay. Shows one random Twitch-culture word at a time
-// while OBS is on the AFK scene. The first chat user to type that word
-// exactly (case-insensitive) wins 100 points and the next word appears.
-// When OBS switches away from the AFK scene, this shows a leaderboard of
-// that round's winners for a while, then goes blank until the next AFK round.
-//
-// Points are recorded through a small self-hosted backend (see
-// points-server/), so they persist across streams. If that backend is
-// unreachable, the word game keeps running locally; only point tracking
-// is affected.
+// AFK Word Game overlay. Streamer.bot runs the game (see
+// streamerbot/word-game.cs): it starts a round when OBS switches to the AFK
+// scene, checks chat for the word, keeps the points, and posts the round
+// results to chat. This page only displays what the script broadcasts:
+//   - round-start / state: show the rules and a countdown, then the word at a random spot
+//   - winner: explode the word box, reveal the winner, then show the next word
+//   - round-end: go blank
 //
 // Edit the config passed to initAfkWordGame() in afk-word-game.config.js.
 
-// Shuffles an array in place using the Fisher-Yates algorithm.
-function shuffleArray(array) {
-    for (let i = array.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [array[i], array[j]] = [array[j], array[i]];
-    }
-    return array;
-}
-
 function initAfkWordGame({
-    channel,
-    twitchUserId,
-    twitchClientId,
-    twitchClientSecret,
-
-    words = [],
-    pointsServerUrl = '',
-    requestTimeoutMs = 3000,
-
-    obsWebSocketUrl = 'ws://localhost:4455',
-    obsWebSocketPassword = '',
-    afkSceneNames = [],
-    leaderboardDisplayDuration = 15000,
+    streamerbotUrl = 'ws://127.0.0.1:8080/',
+    streamerbotPassword = '',
+    actionName = 'Word Game', // Must match the Streamer.bot action name.
+    nextWordDelay = 900,      // Time between the explosion and the next word.
 } = {}) {
-    const layoutEls = {
-        game: document.getElementById('layout-game'),
-        leaderboard: document.getElementById('layout-leaderboard'),
-    };
+    const gameEl = document.getElementById('layout-game');
     const wordDisplayEl = document.getElementById('word-display');
-    const leaderboardListEl = document.getElementById('leaderboard-list');
-    const backendStatusEl = document.getElementById('backend-status');
+    const statusEl = document.getElementById('streamerbot-status');
 
-    function setActiveLayout(name) {
-        for (const key of Object.keys(layoutEls)) {
-            layoutEls[key].classList.toggle('is-active', key === name);
-        }
-    }
-
-    function setBackendOffline(offline) {
-        backendStatusEl.classList.toggle('is-visible', offline);
+    function setGameVisible(visible) {
+        gameEl.classList.toggle('is-active', visible);
     }
 
     // -----------------------------------------------------------------
-    // POINTS SERVER (see points-server/README.md for the API this calls)
+    // PLACEMENT
     // -----------------------------------------------------------------
-    async function callApi(path, options) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
-        try {
-            const res = await fetch(`${pointsServerUrl}${path}`, { ...options, signal: controller.signal });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            setBackendOffline(false);
-            return await res.json();
-        } catch (err) {
-            console.warn(`AFK Word Game: points server request failed (${path})`, err);
-            setBackendOffline(true);
-            return null;
-        } finally {
-            clearTimeout(timer);
-        }
-    }
-
-    function startRound() {
-        return callApi('/api/rounds/start', { method: 'POST' });
-    }
-
-    function endRound(roundId) {
-        return callApi(`/api/rounds/${roundId}/end`, { method: 'POST' });
-    }
-
-    function fetchLeaderboard(roundId) {
-        return callApi(`/api/rounds/${roundId}/leaderboard`);
-    }
-
-    function recordWin(roundId, username, word) {
-        return callApi('/api/wins', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roundId, username, word }),
-        });
-    }
-
-    // -----------------------------------------------------------------
-    // WORD LIFECYCLE
-    // -----------------------------------------------------------------
-    let wordPool = [];
-    let currentWord = null;
-    let wordLocked = false; // True from the moment a word is matched until the next word is shown.
-    let currentRoundId = null;
-
-    function refillPool() {
-        wordPool = shuffleArray([...words]);
-    }
-
     const edgeMargin = 40;
 
     // Returns the allowed range for an element's center, so that the whole
@@ -129,28 +49,87 @@ function initAfkWordGame({
         placeAt(el, r.minX + Math.random() * (r.maxX - r.minX), r.minY + Math.random() * (r.maxY - r.minY));
     }
 
+    // -----------------------------------------------------------------
+    // WORD AND EXPLOSION
+    // -----------------------------------------------------------------
+    let nextWordTimer = null;
+
     function showWord(word) {
-        currentWord = word;
-        wordLocked = false;
+        clearTimeout(nextWordTimer);
+        hideIntro(true);
+        setGameVisible(true);
         wordDisplayEl.classList.remove('is-entering', 'is-hidden');
         wordDisplayEl.textContent = word;
         placeRandomly(wordDisplayEl); // Also forces a reflow, so the pop-in animation retriggers.
         wordDisplayEl.classList.add('is-entering');
     }
 
-    function nextWord() {
-        if (wordPool.length === 0) refillPool();
-        showWord(wordPool.pop());
+    // -----------------------------------------------------------------
+    // INTRO AND COUNTDOWN
+    // -----------------------------------------------------------------
+    const introEl = document.getElementById('intro');
+    const countdownEl = introEl.querySelector('.intro-countdown');
+    const introPointsEl = introEl.querySelector('.intro-points');
+    const introLeaveDuration = 350; // Must match the intro-out animation in the CSS.
+    let countdownTimer = null;
+    let introLeaveTimer = null;
+
+    function hideIntro(animate) {
+        clearTimeout(countdownTimer);
+        if (!introEl.classList.contains('is-visible')) return;
+        introEl.classList.remove('is-visible');
+        if (!animate) return;
+        introEl.classList.add('is-leaving');
+        clearTimeout(introLeaveTimer);
+        introLeaveTimer = setTimeout(() => introEl.classList.remove('is-leaving'), introLeaveDuration);
+    }
+
+    // Shows the rules card and counts down to the first word. Streamer.bot
+    // ignores chat guesses until the same moment.
+    function startCountdown(word, ms, points) {
+        clearTimeout(nextWordTimer);
+        clearTimeout(introLeaveTimer);
+        introEl.classList.remove('is-leaving');
+        setGameVisible(true);
+        wordDisplayEl.classList.add('is-hidden');
+        introPointsEl.textContent = points;
+        introEl.classList.add('is-visible');
+
+        const endAt = performance.now() + ms;
+        let shownSeconds = null;
+        function tick() {
+            const left = endAt - performance.now();
+            if (left <= 0) {
+                showWord(word);
+                return;
+            }
+            const seconds = Math.ceil(left / 1000);
+            if (seconds !== shownSeconds) {
+                shownSeconds = seconds;
+                countdownEl.textContent = seconds;
+                countdownEl.classList.toggle('is-final', seconds <= 3);
+                countdownEl.classList.remove('is-ticking');
+                void countdownEl.offsetWidth; // Force a reflow, so the tick animation retriggers.
+                countdownEl.classList.add('is-ticking');
+            }
+            countdownTimer = setTimeout(tick, left % 1000 || 1000);
+        }
+        tick();
+    }
+
+    // Gives users without a chat color a stable color, like Twitch does.
+    function hashColor(name) {
+        let hash = 0;
+        for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        return `hsl(${Math.abs(hash) % 360}, 70%, 65%)`;
     }
 
     const shardCount = 18;
     const explosionDuration = 2200; // Must cover the longest animation in the .burst CSS.
-    const nextWordDelay = 900;
-    let nextWordTimer = null;
 
     // Replaces the solved word box with a burst: a copy of the box blows
     // outward and fades, shards fly out, and the winner's name pops in.
-    function explodeWord(displayName, color, word) {
+    function explodeWord(displayName, color, word, points) {
         const burst = document.createElement('div');
         burst.className = 'burst';
 
@@ -175,107 +154,52 @@ function initAfkWordGame({
         const name = document.createElement('div');
         name.className = 'burst-name';
         name.textContent = displayName;
-        name.style.color = color;
-        const points = document.createElement('div');
-        points.className = 'burst-points';
-        points.textContent = '+100';
-        reveal.append(name, points);
+        name.style.color = color || '';
+        if (!name.style.color) name.style.color = hashColor(displayName); // Empty or invalid color.
+        const pointsEl = document.createElement('div');
+        pointsEl.className = 'burst-points';
+        pointsEl.textContent = `+${points}`;
+        reveal.append(name, pointsEl);
         burst.appendChild(reveal);
 
-        layoutEls.game.appendChild(burst);
+        gameEl.appendChild(burst);
         placeAt(burst, parseFloat(wordDisplayEl.style.left), parseFloat(wordDisplayEl.style.top));
         setTimeout(() => burst.remove(), explosionDuration);
     }
 
     // -----------------------------------------------------------------
-    // ROUND LIFECYCLE (driven by AFK scene entry/exit)
+    // STREAMER.BOT EVENTS
     // -----------------------------------------------------------------
-    let isAfk = false;
-    let leaderboardTimer = null;
+    function handleGameEvent(data) {
+        if (data.source !== 'stream-word-game') return;
 
-    async function onAfkStart() {
-        isAfk = true;
-        clearTimeout(leaderboardTimer);
-        clearTimeout(nextWordTimer);
-        setActiveLayout('game');
-        refillPool();
-        nextWord();
-
-        const round = await startRound();
-        currentRoundId = round ? round.roundId : null;
-    }
-
-    async function onAfkEnd() {
-        isAfk = false;
-        currentWord = null;
-        wordLocked = true; // Ignore any late matches until the next round starts.
-        clearTimeout(nextWordTimer);
-
-        const roundId = currentRoundId;
-        currentRoundId = null;
-        let leaderboard = [];
-        if (roundId != null) {
-            await endRound(roundId);
-            leaderboard = (await fetchLeaderboard(roundId)) || [];
-        }
-        setActiveLayout('leaderboard');
-        renderLeaderboard(leaderboard);
-        leaderboardTimer = setTimeout(() => setActiveLayout(null), leaderboardDisplayDuration);
-    }
-
-    function renderLeaderboard(entries) {
-        if (entries.length === 0) {
-            leaderboardListEl.innerHTML = '<div class="leaderboard-empty">No winners this round.</div>';
-            return;
-        }
-        leaderboardListEl.innerHTML = entries
-            .map((entry, i) => `
-                <div class="leaderboard-row">
-                    <span class="leaderboard-rank">#${i + 1}</span>
-                    <span class="leaderboard-name">${escapeHtml(entry.username)}</span>
-                    <span class="leaderboard-points">${entry.points} pts</span>
-                </div>
-            `)
-            .join('');
-    }
-
-    // -----------------------------------------------------------------
-    // OBS SCENE DETECTION
-    // -----------------------------------------------------------------
-    connectObsWebSocket({
-        url: obsWebSocketUrl,
-        password: obsWebSocketPassword,
-        onSceneChanged: (sceneName) => {
-            const lower = sceneName.toLowerCase();
-            const matchesAfk = afkSceneNames.some((name) => name.toLowerCase() === lower);
-            if (matchesAfk && !isAfk) {
-                onAfkStart();
-            } else if (!matchesAfk && isAfk) {
-                onAfkEnd();
+        if (data.type === 'round-start' || (data.type === 'state' && data.word)) {
+            const countdownMs = parseInt(data.countdownMs, 10) || 0;
+            if (countdownMs > 0) startCountdown(data.word, countdownMs, data.points || 100);
+            else showWord(data.word);
+        } else if (data.type === 'state' || data.type === 'round-end') {
+            clearTimeout(nextWordTimer);
+            hideIntro(false);
+            setGameVisible(false);
+        } else if (data.type === 'winner') {
+            clearTimeout(nextWordTimer);
+            if (gameEl.classList.contains('is-active')) {
+                explodeWord(data.name, data.color, data.word, data.points || 100);
             }
-        },
-    });
-
-    // -----------------------------------------------------------------
-    // TWITCH CHAT
-    // -----------------------------------------------------------------
-    connectTwitchChat({
-        channel,
-        twitchUserId,
-        twitchClientId,
-        twitchClientSecret,
-        hideCommands: true,
-        onMessage: (displayName, color, html, badgesHtml, rawText) => {
-            if (!isAfk || wordLocked || !currentWord) return;
-            if (rawText.trim().toLowerCase() !== currentWord.toLowerCase()) return;
-
-            wordLocked = true; // Set synchronously, before the await below, so a burst of
-                                // near-simultaneous messages cannot double-award this word.
-            const word = currentWord;
-            explodeWord(displayName, color, word);
             wordDisplayEl.classList.add('is-hidden');
-            nextWordTimer = setTimeout(nextWord, nextWordDelay);
-            if (currentRoundId != null) recordWin(currentRoundId, displayName, word);
+            nextWordTimer = setTimeout(() => showWord(data.nextWord), nextWordDelay);
+        }
+    }
+
+    connectStreamerbot({
+        url: streamerbotUrl,
+        password: streamerbotPassword,
+        onCustomEvent: handleGameEvent,
+        onReady: (send) => {
+            // Ask the script for the current word, in case this page was
+            // reloaded in the middle of a round.
+            send({ request: 'DoAction', action: { name: actionName }, args: { wordGameRequest: 'state' } });
         },
+        onStatusChange: (status) => statusEl.classList.toggle('is-visible', status === 'disconnected'),
     });
 }

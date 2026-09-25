@@ -1,0 +1,36 @@
+# AFK Word Game word list.
+# One word or phrase per line. Chat must type it exactly (case does not matter).
+# Empty lines and lines that start with # are skipped.
+# Changes apply at the start of the next AFK round.
+
+# Twitch culture
+PogChamp
+Kappa
+poggers
+copium
+hopium
+based
+clip it
+raid
+sub
+gifted
+lurking
+first
+gg
+ez
+W
+L
+no cap
+sheesh
+let him cook
+chat is this real
+jumpscare
+mods
+ratio
+cracked
+deadge
+sadge
+monkaS
+OMEGALUL
+5head
+copy that
