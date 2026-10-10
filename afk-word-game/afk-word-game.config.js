@@ -1,7 +1,7 @@
 // AFK Word Game configuration.
 //
-// The word list is in streamerbot/words.txt. The AFK scene name and the points
-// are set in streamerbot/word-game.cs, because Streamer.bot runs the game. This file
+// The emotes come from the channel (Twitch and 7TV). The AFK scene name, the
+// emote sources, and the points are set in streamerbot/word-game.cs, because Streamer.bot runs the game. This file
 // only tells the overlay how to reach Streamer.bot.
 
 initAfkWordGame({
@@ -12,4 +12,9 @@ initAfkWordGame({
 
     // The name of the Streamer.bot action that holds word-game.cs.
     actionName: 'Word Game',
+
+    // true: show the emote image and its name. false: show only the image, so
+    // chat has to know the emote's name. The name shows when someone gets it.
+    // If an image cannot load, the name is shown anyway.
+    showEmoteName: true,
 });

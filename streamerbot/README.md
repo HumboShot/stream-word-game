@@ -4,8 +4,9 @@
 
 - It starts a round when OBS switches to the AFK scene. The overlay explains
   the rules during a countdown, and the bot posts a short explanation in chat.
-- It checks each chat message against the current word (exact match, case-insensitive).
-- It gives 100 points to the first chatter who types the word.
+- It fetches the channel's emotes (see [Emotes](#emotes)) and shows one at a time.
+- It checks each chat message against the current emote's name (exact match, case-insensitive).
+- It gives 100 points to the first chatter who types it.
 - It posts the round results to chat when OBS leaves the AFK scene.
 - It sends events to the overlay over the Streamer.bot WebSocket server.
 
@@ -32,19 +33,38 @@ You can see it in Streamer.bot under Global Variables.
    - Twitch > Chat > Chat Message
 6. **Check the settings** at the top of `word-game.cs` before you paste it:
    - `AfkSceneNames`: the exact name of your AFK scene.
-   - `WordsFile`: the full path to `words.txt`. Change it if the repo is not in `D:\git\stream-word-game`.
    - `PointsPerWin` and `ResultsToPost`.
-   - `CountdownSeconds`: how long the overlay shows the rules before the first word.
+   - `CountdownSeconds`: how long the overlay shows the rules before the first emote.
      Chat guesses do not count during the countdown.
    - `AnnounceInChat`: set to `false` if the bot should not explain the game in chat.
+   - `UseTwitchChannelEmotes`, `UseTwitchGlobalEmotes`, `UseSevenTvChannelEmotes`:
+     which emote sources the game uses. See [Emotes](#emotes).
 
-## Change the words
+If compiling fails with an error about `Newtonsoft`, open the References tab of the
+sub-action, right-click > Add reference from file, and pick `Newtonsoft.Json.dll`
+from the Streamer.bot folder.
 
-Edit `words.txt`. Put one word or phrase on each line. Empty lines and lines
-that start with `#` are skipped, so you can use `#` lines as headings. The
-script reads the file again at the start of each AFK round, so you do not need
-to recompile. If the file is missing or empty, no round starts, and the
-Streamer.bot log shows an error.
+## Emotes
+
+The game uses only emotes. At the start of each AFK round, the script loads them from:
+
+- **Twitch channel emotes** and **Twitch global emotes**, through the Twitch API.
+  It uses the Twitch account that Streamer.bot is logged in with, so there is
+  nothing extra to set up.
+- **7TV channel emotes**, from the channel's active 7TV emote set. If the
+  channel has no 7TV account, this source is empty.
+
+The overlay shows the emote image next to its name. Chat types the name, as
+usual (case-insensitive). Emote lists are cached for `EmoteRefreshMinutes`
+(30 by default), so adding a 7TV emote shows up within that time, or right
+away after you recompile. If a fetch fails, the log shows an error, the
+previous list stays in use, and the next round tries again. Names that chat
+cannot type as one word, and Twitch's old smileys like `:)` and `<3`, are skipped.
+
+To change which emotes show up, add or remove them on Twitch or 7TV, or turn
+sources off in the settings. Turning off `UseTwitchGlobalEmotes` keeps the game
+to your own channel's emotes. If no source returns any emotes, no round starts
+and the log says why.
 
 ## After you change the code
 
@@ -54,8 +74,8 @@ Compiling resets the current round, but the all-time points stay.
 ## Test it
 
 1. Open `afk-word-game/afk-word-game.html` as a Browser Source in OBS.
-2. Switch to the AFK scene. A word appears.
-3. Type the word in your Twitch chat. The box explodes and shows your name.
+2. Switch to the AFK scene. After the countdown, an emote appears.
+3. Type its name in your Twitch chat. The box explodes and shows your name.
 4. Switch to another scene. The bot posts the results in chat.
 
 If nothing happens, open the Streamer.bot log (Settings > Logs). Each scene
