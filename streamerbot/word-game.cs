@@ -11,8 +11,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
+using Newtonsoft.Json.Linq;
 
 public class CPHInline
 {
@@ -32,6 +35,17 @@ public class CPHInline
     // are skipped. The file is read again at the start of every round, so
     // changes apply without recompiling.
     private static string WordsFile = @"D:\git\stream-word-game\streamerbot\words.txt";
+    private const bool UseWordsFile = true;
+
+    // Emote sources. Emotes join the word pool with their image, so the overlay
+    // shows the emote and chat types its name. Twitch emotes use the Twitch
+    // account that Streamer.bot is logged in with.
+    private const bool UseTwitchChannelEmotes = true;
+    private const bool UseTwitchGlobalEmotes = true;
+    private const bool UseSevenTvChannelEmotes = true;
+
+    // Emote lists are fetched at round start, at most once per this many minutes.
+    private const int EmoteRefreshMinutes = 30;
 
     // Persisted global variable that holds all-time points, one line per
     // user: "login<TAB>display name<TAB>points".
@@ -40,14 +54,22 @@ public class CPHInline
     // ---- Round state (kept in memory; a round ends when Streamer.bot restarts) ----
     private static readonly object Sync = new object();
     private static readonly Random Rng = new Random();
-    private static readonly List<string> Pool = new List<string>();
-    private static List<string> words = new List<string>();
+    private static readonly List<WordEntry> Pool = new List<WordEntry>();
+    private static List<WordEntry> words = new List<WordEntry>();
+    private static List<WordEntry> emoteCache = new List<WordEntry>();
+    private static DateTime emotesFetchedAt = DateTime.MinValue; // UTC.
     private static readonly Dictionary<string, RoundEntry> RoundScores =
         new Dictionary<string, RoundEntry>(StringComparer.OrdinalIgnoreCase);
     private static bool roundActive;
-    private static string currentWord;
+    private static WordEntry currentWord;
     private static DateTime wordRevealAt; // UTC. Chat guesses before this time do not count.
     private static int winCounter;
+
+    private class WordEntry
+    {
+        public string Text;
+        public string Image; // Emote image URL, or null for plain words.
+    }
 
     private class RoundEntry
     {
@@ -72,8 +94,9 @@ public class CPHInline
             // so a reloaded overlay shows the current word or countdown straight away.
             lock (Sync)
             {
-                Broadcast("type", "state", "word", roundActive ? currentWord : null,
-                    "countdownMs", CountdownRemainingMs().ToString(), "points", PointsPerWin.ToString());
+                WordEntry shown = roundActive ? currentWord : null;
+                Broadcast("type", "state", "word", shown != null ? shown.Text : null,
+                    "image", shown != null ? shown.Image : null, "countdownMs", CountdownRemainingMs().ToString(), "points", PointsPerWin.ToString());
             }
             return true;
         }
@@ -85,6 +108,8 @@ public class CPHInline
     private void OnSceneChanged(string sceneName)
     {
         bool isAfk = AfkSceneNames.Any(n => string.Equals(n, sceneName, StringComparison.OrdinalIgnoreCase));
+        // Fetch emotes outside the lock, so slow HTTP calls do not block chat handling.
+        if (isAfk && !roundActive) RefreshEmotes();
         lock (Sync)
         {
             CPH.LogInfo("Word Game: scene changed to '" + sceneName + "' (AFK scene: " + isAfk
@@ -103,7 +128,7 @@ public class CPHInline
         Pool.Clear();
         currentWord = NextWord(null);
         wordRevealAt = DateTime.UtcNow.AddSeconds(CountdownSeconds);
-        Broadcast("type", "round-start", "word", currentWord,
+        Broadcast("type", "round-start", "word", currentWord.Text, "image", currentWord.Image,
             "countdownMs", CountdownRemainingMs().ToString(), "points", PointsPerWin.ToString());
 
         if (AnnounceInChat)
@@ -132,7 +157,8 @@ public class CPHInline
         string message;
         if (!CPH.TryGetArg("message", out message) || message == null)
             CPH.TryGetArg("rawInput", out message);
-        if (string.IsNullOrWhiteSpace(message)) return;
+        message = CleanMessage(message);
+        if (message.Length == 0) return;
 
         string displayName, login, color;
         CPH.TryGetArg("user", out displayName);
@@ -145,42 +171,52 @@ public class CPHInline
         lock (Sync)
         {
             if (!roundActive || currentWord == null || DateTime.UtcNow < wordRevealAt) return;
-            if (!string.Equals(message.Trim(), currentWord, StringComparison.OrdinalIgnoreCase)) return;
+            if (!string.Equals(message, currentWord.Text, StringComparison.OrdinalIgnoreCase)) return;
 
-            string solved = currentWord;
+            WordEntry solved = currentWord;
             AddRoundPoints(login, displayName);
             AddAllTimePoints(login, displayName);
             currentWord = NextWord(solved);
-            Broadcast("type", "winner", "word", solved, "name", displayName, "color", color,
-                "points", PointsPerWin.ToString(), "nextWord", currentWord);
+            Broadcast("type", "winner", "word", solved.Text, "image", solved.Image, "name", displayName,
+                "color", color, "points", PointsPerWin.ToString(),
+                "nextWord", currentWord.Text, "nextImage", currentWord.Image);
         }
     }
 
     // ---- Words ----------------------------------------------------------
+    // Builds the round's word pool from the cached emotes and words.txt.
+    // An emote wins over a plain word with the same text, because it has an image.
     private bool LoadWords()
     {
-        try
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pool = emoteCache.Where(e => seen.Add(e.Text)).ToList();
+
+        if (UseWordsFile)
         {
-            words = System.IO.File.ReadAllLines(WordsFile)
-                .Select(l => l.Trim())
-                .Where(l => l.Length > 0 && !l.StartsWith("#"))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            try
+            {
+                pool.AddRange(File.ReadAllLines(WordsFile)
+                    .Select(l => l.Trim())
+                    .Where(l => l.Length > 0 && !l.StartsWith("#") && seen.Add(l))
+                    .Select(l => new WordEntry { Text = l }));
+            }
+            catch (Exception ex)
+            {
+                CPH.LogError("Word Game: cannot read " + WordsFile + ": " + ex.Message);
+            }
         }
-        catch (Exception ex)
+
+        if (pool.Count == 0)
         {
-            CPH.LogError("Word Game: cannot read " + WordsFile + ": " + ex.Message);
+            CPH.LogError("Word Game: no words. Check words.txt and the emote settings.");
             return false;
         }
-        if (words.Count == 0)
-        {
-            CPH.LogError("Word Game: " + WordsFile + " has no words.");
-            return false;
-        }
+        words = pool;
+        CPH.LogInfo("Word Game: " + pool.Count + " words in the pool (" + emoteCache.Count + " emotes).");
         return true;
     }
 
-    private string NextWord(string previous)
+    private WordEntry NextWord(WordEntry previous)
     {
         if (Pool.Count == 0)
         {
@@ -188,17 +224,161 @@ public class CPHInline
             for (int i = Pool.Count - 1; i > 0; i--)
             {
                 int j = Rng.Next(i + 1);
-                string tmp = Pool[i]; Pool[i] = Pool[j]; Pool[j] = tmp;
+                WordEntry tmp = Pool[i]; Pool[i] = Pool[j]; Pool[j] = tmp;
             }
             // Avoid showing the same word twice in a row across a reshuffle.
-            if (Pool.Count > 1 && string.Equals(Pool[Pool.Count - 1], previous, StringComparison.OrdinalIgnoreCase))
+            if (Pool.Count > 1 && Pool[Pool.Count - 1] == previous)
             {
-                string tmp = Pool[0]; Pool[0] = Pool[Pool.Count - 1]; Pool[Pool.Count - 1] = tmp;
+                WordEntry tmp = Pool[0]; Pool[0] = Pool[Pool.Count - 1]; Pool[Pool.Count - 1] = tmp;
             }
         }
-        string word = Pool[Pool.Count - 1];
+        WordEntry word = Pool[Pool.Count - 1];
         Pool.RemoveAt(Pool.Count - 1);
         return word;
+    }
+
+    // Chat clients such as Chatterino and 7TV append invisible characters to
+    // repeated messages to get around Twitch's duplicate message check.
+    private static readonly string[] InvisibleChars =
+        { "\uDB40\uDC00", "\u034F", "\u200B", "\u200C", "\u200D", "\u2060", "\uFEFF" };
+
+    private static string CleanMessage(string message)
+    {
+        foreach (string c in InvisibleChars) message = message.Replace(c, "");
+        return message.Trim();
+    }
+
+    // ---- Emotes ---------------------------------------------------------
+    private void RefreshEmotes()
+    {
+        if (!UseTwitchChannelEmotes && !UseTwitchGlobalEmotes && !UseSevenTvChannelEmotes) return;
+        lock (Sync)
+        {
+            if (DateTime.UtcNow - emotesFetchedAt < TimeSpan.FromMinutes(EmoteRefreshMinutes)) return;
+        }
+
+        string broadcasterId;
+        CPH.TryGetArg("broadcastUserId", out broadcasterId);
+        ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+
+        var fetched = new List<WordEntry>();
+        bool failed = false;
+        bool needsChannel = UseTwitchChannelEmotes || UseSevenTvChannelEmotes;
+        if (needsChannel && string.IsNullOrEmpty(broadcasterId))
+        {
+            CPH.LogError("Word Game: no broadcastUserId, so channel emotes are skipped. Is Twitch connected?");
+            failed = true;
+        }
+        else
+        {
+            // Channel emotes first, so they win over global emotes with the same name.
+            if (UseTwitchChannelEmotes)
+                failed |= !FetchEmotes("Twitch channel", () => ParseTwitchEmotes(
+                    HttpGet("https://api.twitch.tv/helix/chat/emotes?broadcaster_id=" + broadcasterId, true)), fetched);
+            if (UseSevenTvChannelEmotes)
+                failed |= !FetchEmotes("7TV channel", () => FetchSevenTvEmotes(broadcasterId), fetched);
+        }
+        if (UseTwitchGlobalEmotes)
+            failed |= !FetchEmotes("Twitch global", () => ParseTwitchEmotes(
+                HttpGet("https://api.twitch.tv/helix/chat/emotes/global", true)), fetched);
+
+        lock (Sync)
+        {
+            // On a failure, keep the old list if the new one came back empty,
+            // and leave the timestamp alone so the next round tries again.
+            if (fetched.Count > 0 || !failed) emoteCache = fetched;
+            if (!failed) emotesFetchedAt = DateTime.UtcNow;
+        }
+    }
+
+    private bool FetchEmotes(string source, Func<List<WordEntry>> fetch, List<WordEntry> into)
+    {
+        try
+        {
+            List<WordEntry> emotes = fetch();
+            into.AddRange(emotes);
+            CPH.LogInfo("Word Game: " + emotes.Count + " " + source + " emotes.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            CPH.LogError("Word Game: cannot fetch " + source + " emotes: " + ex.Message);
+            return false;
+        }
+    }
+
+    private List<WordEntry> ParseTwitchEmotes(string json)
+    {
+        var result = new List<WordEntry>();
+        foreach (JToken e in (JArray)JObject.Parse(json)["data"])
+        {
+            string name = (string)e["name"];
+            if (!IsTypeableEmote(name)) continue;
+            // "default" serves the animated version when the emote has one.
+            result.Add(new WordEntry
+            {
+                Text = name,
+                Image = "https://static-cdn.jtvnw.net/emoticons/v2/" + (string)e["id"] + "/default/dark/3.0",
+            });
+        }
+        return result;
+    }
+
+    private List<WordEntry> FetchSevenTvEmotes(string broadcasterId)
+    {
+        string json;
+        try
+        {
+            json = HttpGet("https://7tv.io/v3/users/twitch/" + broadcasterId, false);
+        }
+        catch (WebException ex)
+        {
+            var response = ex.Response as HttpWebResponse;
+            if (response != null && response.StatusCode == HttpStatusCode.NotFound)
+                return new List<WordEntry>(); // The channel has no 7TV account.
+            throw;
+        }
+
+        var result = new List<WordEntry>();
+        JToken set = JObject.Parse(json)["emote_set"];
+        JArray emotes = set != null && set.Type == JTokenType.Object ? set["emotes"] as JArray : null;
+        if (emotes == null) return result;
+
+        foreach (JToken e in emotes)
+        {
+            string name = (string)e["name"]; // The channel's alias, if it renamed the emote.
+            if (!IsTypeableEmote(name)) continue;
+            string host = (string)e.SelectToken("data.host.url");
+            string baseUrl = string.IsNullOrEmpty(host) ? "//cdn.7tv.app/emote/" + (string)e["id"] : host;
+            result.Add(new WordEntry { Text = name, Image = "https:" + baseUrl + "/4x.webp" });
+        }
+        return result;
+    }
+
+    // Skips names that chat cannot type as one word, and Twitch's old
+    // smiley emotes like ":)" and "<3".
+    private static bool IsTypeableEmote(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Any(char.IsWhiteSpace)) return false;
+        return name.Count(char.IsLetterOrDigit) >= Math.Min(2, name.Length);
+    }
+
+    private string HttpGet(string url, bool twitchAuth)
+    {
+        var request = (HttpWebRequest)WebRequest.Create(url);
+        request.Timeout = 8000;
+        request.ReadWriteTimeout = 8000;
+        request.UserAgent = "stream-word-game";
+        if (twitchAuth)
+        {
+            request.Headers["Client-Id"] = CPH.TwitchClientId;
+            request.Headers["Authorization"] = "Bearer " + CPH.TwitchOAuthToken;
+        }
+        using (var response = (HttpWebResponse)request.GetResponse())
+        using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+        {
+            return reader.ReadToEnd();
+        }
     }
 
     // ---- Points ---------------------------------------------------------

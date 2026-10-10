@@ -45,6 +45,22 @@ body {
     box-shadow: 0 0 28px rgba(0, 0, 0, 0.5);
 }
 
+#word-display,
+.burst-shell {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+}
+
+/* Emote words show the emote next to its name. Fixed height, natural width,
+   because 7TV emotes can be wide. */
+.word-emote {
+    height: 112px;
+    max-width: 448px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 10px rgba(0, 255, 255, 0.35));
+}
+
 #word-display.is-entering {
     animation: word-pop 0.3s ease-out;
 }
