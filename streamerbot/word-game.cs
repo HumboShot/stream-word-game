@@ -31,15 +31,8 @@ public class CPHInline
     // Set to false to skip the chat message that explains the game at round start.
     private const bool AnnounceInChat = true;
 
-    // One word or phrase per line. Empty lines and lines that start with "#"
-    // are skipped. The file is read again at the start of every round, so
-    // changes apply without recompiling.
-    private static string WordsFile = @"D:\git\stream-word-game\streamerbot\words.txt";
-    private const bool UseWordsFile = true;
-
-    // Emote sources. Emotes join the word pool with their image, so the overlay
-    // shows the emote and chat types its name. Twitch emotes use the Twitch
-    // account that Streamer.bot is logged in with.
+    // Emote sources. The overlay shows the emote and chat types its name.
+    // Twitch emotes use the Twitch account that Streamer.bot is logged in with.
     private const bool UseTwitchChannelEmotes = true;
     private const bool UseTwitchGlobalEmotes = true;
     private const bool UseSevenTvChannelEmotes = true;
@@ -68,7 +61,7 @@ public class CPHInline
     private class WordEntry
     {
         public string Text;
-        public string Image; // Emote image URL, or null for plain words.
+        public string Image; // Emote image URL.
     }
 
     private class RoundEntry
@@ -133,8 +126,8 @@ public class CPHInline
 
         if (AnnounceInChat)
         {
-            CPH.SendMessage("AFK word game starts in " + CountdownSeconds + " seconds! Words pop up on screen. "
-                + "The first one to type the word in chat gets " + PointsPerWin + " points.");
+            CPH.SendMessage("AFK word game starts in " + CountdownSeconds + " seconds! Emotes pop up on screen. "
+                + "The first one to type the emote's name in chat gets " + PointsPerWin + " points.");
         }
     }
 
@@ -184,35 +177,19 @@ public class CPHInline
     }
 
     // ---- Words ----------------------------------------------------------
-    // Builds the round's word pool from the cached emotes and words.txt.
-    // An emote wins over a plain word with the same text, because it has an image.
+    // Builds the round's word pool from the cached emotes. Matching ignores case,
+    // so emotes that differ only in case count once (the first source wins).
     private bool LoadWords()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pool = emoteCache.Where(e => seen.Add(e.Text)).ToList();
-
-        if (UseWordsFile)
-        {
-            try
-            {
-                pool.AddRange(File.ReadAllLines(WordsFile)
-                    .Select(l => l.Trim())
-                    .Where(l => l.Length > 0 && !l.StartsWith("#") && seen.Add(l))
-                    .Select(l => new WordEntry { Text = l }));
-            }
-            catch (Exception ex)
-            {
-                CPH.LogError("Word Game: cannot read " + WordsFile + ": " + ex.Message);
-            }
-        }
-
         if (pool.Count == 0)
         {
-            CPH.LogError("Word Game: no words. Check words.txt and the emote settings.");
+            CPH.LogError("Word Game: no emotes, so no round starts. Check the emote errors above and the emote settings.");
             return false;
         }
         words = pool;
-        CPH.LogInfo("Word Game: " + pool.Count + " words in the pool (" + emoteCache.Count + " emotes).");
+        CPH.LogInfo("Word Game: " + pool.Count + " emotes in the pool.");
         return true;
     }
 
