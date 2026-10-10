@@ -12,4 +12,9 @@ initAfkWordGame({
 
     // The name of the Streamer.bot action that holds word-game.cs.
     actionName: 'Word Game',
+
+    // true: show the emote image and its name. false: show only the image, so
+    // chat has to know the emote's name. The name shows when someone gets it.
+    // If an image cannot load, the name is shown anyway.
+    showEmoteName: true,
 });

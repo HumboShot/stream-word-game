@@ -13,6 +13,7 @@ function initAfkWordGame({
     streamerbotPassword = '',
     actionName = 'Word Game', // Must match the Streamer.bot action name.
     nextWordDelay = 900,      // Time between the explosion and the next word.
+    showEmoteName = true,     // false: show only the emote image until someone solves it.
 } = {}) {
     const gameEl = document.getElementById('layout-game');
     const wordDisplayEl = document.getElementById('word-display');
@@ -55,25 +56,26 @@ function initAfkWordGame({
     let nextWordTimer = null;
 
     // Fills a word box with the emote image (if any) and the text chat must type.
+    // Without showName, the text is left out, unless there is no image to show.
     // onImageLoad runs when the image size is known, so the box can be kept on screen.
-    function renderWord(el, word, image, onImageLoad) {
+    function renderWord(el, word, image, { showName = true, onImageLoad } = {}) {
         el.replaceChildren();
+        const text = document.createElement('span');
+        text.className = 'word-text';
+        text.textContent = word;
         if (image) {
             const img = document.createElement('img');
             img.className = 'word-emote';
             img.alt = '';
             img.addEventListener('load', () => onImageLoad && onImageLoad());
             img.addEventListener('error', () => {
-                img.remove();
+                img.replaceWith(text); // Leaves only the name, whether or not it was shown.
                 onImageLoad && onImageLoad();
             });
             img.src = image;
             el.appendChild(img);
         }
-        const text = document.createElement('span');
-        text.className = 'word-text';
-        text.textContent = word;
-        el.appendChild(text);
+        if (showName || !image) el.appendChild(text);
     }
 
     function showWord(word, image) {
@@ -81,9 +83,11 @@ function initAfkWordGame({
         hideIntro(true);
         setGameVisible(true);
         wordDisplayEl.classList.remove('is-entering', 'is-hidden');
-        renderWord(wordDisplayEl, word, image, () => {
+        renderWord(wordDisplayEl, word, image, {
+            showName: showEmoteName,
             // The image changed the box size. Pull it back inside the canvas.
-            placeAt(wordDisplayEl, parseFloat(wordDisplayEl.style.left), parseFloat(wordDisplayEl.style.top));
+            onImageLoad: () => placeAt(wordDisplayEl,
+                parseFloat(wordDisplayEl.style.left), parseFloat(wordDisplayEl.style.top)),
         });
         placeRandomly(wordDisplayEl); // Also forces a reflow, so the pop-in animation retriggers.
         wordDisplayEl.classList.add('is-entering');
@@ -166,7 +170,7 @@ function initAfkWordGame({
 
         const shell = document.createElement('div');
         shell.className = 'burst-shell';
-        renderWord(shell, word, image);
+        renderWord(shell, word, image); // Always with the name, so the answer is revealed.
         burst.appendChild(shell);
 
         for (let i = 0; i < shardCount; i++) {

@@ -22,5 +22,7 @@ to chat.
    `shared/secrets.local.example.js` to `shared/secrets.local.js` and fill it in.
 3. If Streamer.bot runs on another PC, change `streamerbotUrl` in
    `afk-word-game/afk-word-game.config.js`.
-4. In OBS, add `afk-word-game/afk-word-game.html` as a Browser Source at
+4. To show only the emote image, without its name, set `showEmoteName: false`
+   in `afk-word-game/afk-word-game.config.js`. Chat then has to know the name.
+5. In OBS, add `afk-word-game/afk-word-game.html` as a Browser Source at
    2560x1440 on your AFK scene.
