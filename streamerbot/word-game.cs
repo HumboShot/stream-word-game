@@ -24,6 +24,14 @@ public class CPHInline
     private const int PointsPerWin = 100;
     private const int ResultsToPost = 5;
 
+    // After the first correct guess, the same word still counts for this many
+    // seconds. Late guesses get points that slide from LateMaxPoints (right
+    // after the first guess) down to LateMinPoints (at the end of the window).
+    // Each chatter can score once per word. Set LateWindowSeconds to 0 to turn this off.
+    private static int LateWindowSeconds = 5;
+    private const int LateMaxPoints = 50;
+    private const int LateMinPoints = 5;
+
     // Seconds between entering the AFK scene and the first word. The overlay
     // explains the game during this time, and chat guesses do not count yet.
     private static int CountdownSeconds = 10;
@@ -64,6 +72,11 @@ public class CPHInline
         public string Image; // Emote image URL.
     }
 
+    // The most recently solved word, which still counts at reduced points.
+    private static WordEntry lateWord;
+    private static DateTime lateWordSolvedAt; // UTC.
+    private static readonly HashSet<string> LateScorers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     private class RoundEntry
     {
         public string Name;
@@ -87,9 +100,7 @@ public class CPHInline
             // so a reloaded overlay shows the current word or countdown straight away.
             lock (Sync)
             {
-                WordEntry shown = roundActive ? currentWord : null;
-                Broadcast("type", "state", "word", shown != null ? shown.Text : null,
-                    "image", shown != null ? shown.Image : null, "countdownMs", CountdownRemainingMs().ToString(), "points", PointsPerWin.ToString());
+                BroadcastRoundInfo("state");
             }
             return true;
         }
@@ -118,17 +129,28 @@ public class CPHInline
         roundActive = true;
         RoundScores.Clear();
         winCounter = 0;
+        lateWord = null;
         Pool.Clear();
         currentWord = NextWord(null);
         wordRevealAt = DateTime.UtcNow.AddSeconds(CountdownSeconds);
-        Broadcast("type", "round-start", "word", currentWord.Text, "image", currentWord.Image,
-            "countdownMs", CountdownRemainingMs().ToString(), "points", PointsPerWin.ToString());
+        BroadcastRoundInfo("round-start");
 
         if (AnnounceInChat)
         {
+            string lateText = LateWindowSeconds > 0
+                ? " Anyone else who types it within " + LateWindowSeconds + " seconds still gets up to " + LateMaxPoints + "."
+                : "";
             CPH.SendMessage("AFK word game starts in " + CountdownSeconds + " seconds! Emotes pop up on screen. "
-                + "The first one to type the emote's name in chat gets " + PointsPerWin + " points.");
+                + "The first one to type the emote's name in chat gets " + PointsPerWin + " points." + lateText);
         }
+    }
+
+    private void BroadcastRoundInfo(string type)
+    {
+        WordEntry shown = roundActive ? currentWord : null;
+        Broadcast("type", type, "word", shown != null ? shown.Text : null, "image", shown != null ? shown.Image : null,
+            "countdownMs", CountdownRemainingMs().ToString(), "points", PointsPerWin.ToString(),
+            "lateSeconds", LateWindowSeconds.ToString(), "latePoints", LateMaxPoints.ToString());
     }
 
     private int CountdownRemainingMs()
@@ -141,6 +163,7 @@ public class CPHInline
     {
         roundActive = false;
         currentWord = null;
+        lateWord = null;
         Broadcast("type", "round-end");
         PostResults();
     }
@@ -164,16 +187,38 @@ public class CPHInline
         lock (Sync)
         {
             if (!roundActive || currentWord == null || DateTime.UtcNow < wordRevealAt) return;
-            if (!string.Equals(message, currentWord.Text, StringComparison.OrdinalIgnoreCase)) return;
-
-            WordEntry solved = currentWord;
-            AddRoundPoints(login, displayName);
-            AddAllTimePoints(login, displayName);
-            currentWord = NextWord(solved);
-            Broadcast("type", "winner", "word", solved.Text, "image", solved.Image, "name", displayName,
-                "color", color, "points", PointsPerWin.ToString(),
-                "nextWord", currentWord.Text, "nextImage", currentWord.Image);
+            if (string.Equals(message, currentWord.Text, StringComparison.OrdinalIgnoreCase))
+            {
+                WordEntry solved = currentWord;
+                AddPoints(login, displayName, PointsPerWin);
+                lateWord = solved;
+                lateWordSolvedAt = DateTime.UtcNow;
+                LateScorers.Clear();
+                LateScorers.Add(login);
+                currentWord = NextWord(solved);
+                Broadcast("type", "winner", "word", solved.Text, "image", solved.Image, "name", displayName,
+                    "color", color, "points", PointsPerWin.ToString(),
+                    "nextWord", currentWord.Text, "nextImage", currentWord.Image);
+            }
+            else if (lateWord != null && string.Equals(message, lateWord.Text, StringComparison.OrdinalIgnoreCase))
+            {
+                int points = LatePoints(DateTime.UtcNow - lateWordSolvedAt);
+                if (points <= 0 || !LateScorers.Add(login)) return;
+                AddPoints(login, displayName, points);
+                Broadcast("type", "late", "word", lateWord.Text, "name", displayName, "color", color,
+                    "points", points.ToString());
+            }
         }
+    }
+
+    // Slides from LateMaxPoints down to LateMinPoints over the late window.
+    // Returns 0 once the window is over.
+    private static int LatePoints(TimeSpan sinceFirstGuess)
+    {
+        double windowMs = LateWindowSeconds * 1000.0;
+        double elapsed = sinceFirstGuess.TotalMilliseconds;
+        if (windowMs <= 0 || elapsed > windowMs) return 0;
+        return (int)Math.Round(LateMaxPoints - (LateMaxPoints - LateMinPoints) * (elapsed / windowMs));
     }
 
     // ---- Words ----------------------------------------------------------
@@ -359,7 +404,7 @@ public class CPHInline
     }
 
     // ---- Points ---------------------------------------------------------
-    private void AddRoundPoints(string login, string displayName)
+    private void AddPoints(string login, string displayName, int points)
     {
         RoundEntry entry;
         if (!RoundScores.TryGetValue(login, out entry))
@@ -368,8 +413,9 @@ public class CPHInline
             RoundScores[login] = entry;
         }
         entry.Name = displayName;
-        entry.Points += PointsPerWin;
+        entry.Points += points;
         winCounter++;
+        AddAllTimePoints(login, displayName, points);
     }
 
     private Dictionary<string, KeyValuePair<string, int>> LoadAllTimePoints()
@@ -388,12 +434,12 @@ public class CPHInline
         return result;
     }
 
-    private void AddAllTimePoints(string login, string displayName)
+    private void AddAllTimePoints(string login, string displayName, int points)
     {
         var all = LoadAllTimePoints();
         KeyValuePair<string, int> existing;
-        int points = all.TryGetValue(login, out existing) ? existing.Value : 0;
-        all[login] = new KeyValuePair<string, int>(displayName, points + PointsPerWin);
+        int total = all.TryGetValue(login, out existing) ? existing.Value : 0;
+        all[login] = new KeyValuePair<string, int>(displayName, total + points);
 
         string raw = string.Join("\n", all.Select(kv => kv.Key + "\t" + kv.Value.Key + "\t" + kv.Value.Value));
         CPH.SetGlobalVar(AllTimePointsVar, raw, true);

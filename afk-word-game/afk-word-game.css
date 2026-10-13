@@ -178,6 +178,58 @@ body {
     }
 }
 
+.intro-late {
+    opacity: 0.85;
+}
+
+/* --- LATE GUESS POP ---
+   A small "+27 Name" that rises and fades below the last explosion, for each
+   chatter who typed the solved word within the late window. */
+.late-pop {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    white-space: nowrap;
+    font-size: 30px;
+    font-weight: bold;
+    text-shadow: 0 0 10px currentColor, 0 0 3px #000;
+    pointer-events: none;
+    opacity: 0;
+    animation: late-pop 1.8s ease-out forwards;
+}
+
+.late-pop-points {
+    color: #ffd700;
+}
+
+@keyframes late-pop {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.6);
+    }
+
+    15% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1.08);
+    }
+
+    25% {
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    70% {
+        opacity: 1;
+        transform: translate(-50%, -50%) translateY(-20px);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) translateY(-60px);
+    }
+}
+
 .intro-footer {
     margin-top: 20px;
     font-size: 24px;

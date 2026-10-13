@@ -6,7 +6,8 @@
   the rules during a countdown, and the bot posts a short explanation in chat.
 - It fetches the channel's emotes (see [Emotes](#emotes)) and shows one at a time.
 - It checks each chat message against the current emote's name (exact match, case-insensitive).
-- It gives 100 points to the first chatter who types it.
+- It gives 100 points to the first chatter who types it. Others who type
+  the same name within 5 seconds get fewer points, and the faster they are, the more they get.
 - It posts the round results to chat when OBS leaves the AFK scene.
 - It sends events to the overlay over the Streamer.bot WebSocket server.
 
@@ -39,10 +40,18 @@ You can see it in Streamer.bot under Global Variables.
    - `AnnounceInChat`: set to `false` if the bot should not explain the game in chat.
    - `UseTwitchChannelEmotes`, `UseTwitchGlobalEmotes`, `UseSevenTvChannelEmotes`:
      which emote sources the game uses. See [Emotes](#emotes).
+   - `LateWindowSeconds`, `LateMaxPoints`, `LateMinPoints`: after the first correct
+     guess, the emote still counts for `LateWindowSeconds`. Late guesses get points that
+     slide from `LateMaxPoints` down to `LateMinPoints` over that time. Each chatter can
+     score once per emote. Set `LateWindowSeconds` to `0` to turn this off.
 
 If compiling fails with an error about `Newtonsoft`, open the References tab of the
 sub-action, right-click > Add reference from file, and pick `Newtonsoft.Json.dll`
 from the Streamer.bot folder.
+
+If compiling fails with `The type or namespace name 'Net' does not exist in the namespace 'System'`,
+add a reference to `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.dll` in the same way.
+The emote fetching needs it. Until the code compiles, nothing happens when you switch to the AFK scene.
 
 ## Emotes
 

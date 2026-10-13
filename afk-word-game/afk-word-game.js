@@ -104,6 +104,7 @@ function initAfkWordGame({
     const introEl = document.getElementById('intro');
     const countdownEl = introEl.querySelector('.intro-countdown');
     const introPointsEl = introEl.querySelector('.intro-points');
+    const introLateEl = introEl.querySelector('.intro-late');
     const introLeaveDuration = 350; // Must match the intro-out animation in the CSS.
     let countdownTimer = null;
     let introLeaveTimer = null;
@@ -120,13 +121,16 @@ function initAfkWordGame({
 
     // Shows the rules card and counts down to the first word. Streamer.bot
     // ignores chat guesses until the same moment.
-    function startCountdown(word, image, ms, points) {
+    function startCountdown(word, image, ms, points, lateSeconds, latePoints) {
         clearTimeout(nextWordTimer);
         clearTimeout(introLeaveTimer);
         introEl.classList.remove('is-leaving');
         setGameVisible(true);
         wordDisplayEl.classList.add('is-hidden');
         introPointsEl.textContent = points;
+        introLateEl.hidden = !(lateSeconds > 0);
+        introLateEl.querySelector('.intro-late-seconds').textContent = lateSeconds;
+        introLateEl.querySelector('.intro-late-points').textContent = latePoints;
         introEl.classList.add('is-visible');
         preloadImage(image);
 
@@ -199,7 +203,38 @@ function initAfkWordGame({
 
         gameEl.appendChild(burst);
         placeAt(burst, parseFloat(wordDisplayEl.style.left), parseFloat(wordDisplayEl.style.top));
+        lastBurstCenter = { x: parseFloat(burst.style.left), y: parseFloat(burst.style.top) };
+        latePopCount = 0;
         setTimeout(() => burst.remove(), explosionDuration);
+    }
+
+    // Late guesses: a small "+27 Name" pop that rises below the last explosion.
+    // Pops stack one line apart, and wrap after latePopRows, so they do not overlap.
+    const latePopDuration = 1800; // Must match the late-pop animation in the CSS.
+    const latePopRows = 6;
+    const latePopLineHeight = 46;
+    let lastBurstCenter = null;
+    let latePopCount = 0;
+
+    function showLatePop(displayName, color, points) {
+        const pop = document.createElement('div');
+        pop.className = 'late-pop';
+        const pointsEl = document.createElement('span');
+        pointsEl.className = 'late-pop-points';
+        pointsEl.textContent = `+${points}`;
+        const name = document.createElement('span');
+        name.className = 'late-pop-name';
+        name.textContent = displayName;
+        name.style.color = color || '';
+        if (!name.style.color) name.style.color = hashColor(displayName);
+        pop.append(pointsEl, name);
+        gameEl.appendChild(pop);
+
+        const center = lastBurstCenter || { x: document.body.clientWidth / 2, y: document.body.clientHeight / 2 };
+        const row = latePopCount % latePopRows;
+        latePopCount++;
+        placeAt(pop, center.x + (Math.random() - 0.5) * 120, center.y + 100 + row * latePopLineHeight);
+        setTimeout(() => pop.remove(), latePopDuration);
     }
 
     // -----------------------------------------------------------------
@@ -210,8 +245,14 @@ function initAfkWordGame({
 
         if (data.type === 'round-start' || (data.type === 'state' && data.word)) {
             const countdownMs = parseInt(data.countdownMs, 10) || 0;
-            if (countdownMs > 0) startCountdown(data.word, data.image, countdownMs, data.points || 100);
-            else showWord(data.word, data.image);
+            if (countdownMs > 0) {
+                startCountdown(data.word, data.image, countdownMs, data.points || 100,
+                    parseInt(data.lateSeconds, 10) || 0, data.latePoints || 0);
+            } else {
+                showWord(data.word, data.image);
+            }
+        } else if (data.type === 'late') {
+            if (gameEl.classList.contains('is-active')) showLatePop(data.name, data.color, data.points);
         } else if (data.type === 'state' || data.type === 'round-end') {
             clearTimeout(nextWordTimer);
             hideIntro(false);
